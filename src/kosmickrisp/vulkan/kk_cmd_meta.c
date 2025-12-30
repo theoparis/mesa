@@ -253,7 +253,6 @@ kk_CmdBlitImage2(VkCommandBuffer commandBuffer,
    vk_meta_blit_image2(&cmd->vk, &dev->meta, pBlitImageInfo);
    kk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
 
-   fprintf(stderr, "DEBUG: kk_CmdBlitImage2 completed\n");
 }
 
 VKAPI_ATTR void VKAPI_CALL

@@ -136,9 +136,7 @@ kopper_CreateSurface(struct zink_screen *screen, struct kopper_displaytarget *cd
       PFN_vkCreateMetalSurfaceEXT createMetalSurfaceEXT = (PFN_vkCreateMetalSurfaceEXT)VKSCR(GetInstanceProcAddr)(screen->instance, "vkCreateMetalSurfaceEXT");
       if (createMetalSurfaceEXT) {
          error = createMetalSurfaceEXT(screen->instance, metal, NULL, &surface);
-         fprintf(stderr, "DEBUG: vkCreateMetalSurfaceEXT returned %d, surface=%p, pLayer=%p\n", error, (void*)surface, metal->pLayer);
       } else {
-         fprintf(stderr, "DEBUG: vkCreateMetalSurfaceEXT not found!\n");
          error = VK_ERROR_EXTENSION_NOT_PRESENT;
       }
       break;
@@ -153,7 +151,6 @@ kopper_CreateSurface(struct zink_screen *screen, struct kopper_displaytarget *cd
 
    VkBool32 supported;
    error = VKSCR(GetPhysicalDeviceSurfaceSupportKHR)(screen->pdev, screen->gfx_queue, surface, &supported);
-   fprintf(stderr, "DEBUG: GetPhysicalDeviceSurfaceSupportKHR error=%d supported=%d\n", error, supported);
    if (!zink_screen_handle_vkresult(screen, error) || !supported)
       goto fail;
 
@@ -440,14 +437,10 @@ update_caps(struct zink_screen *screen, struct kopper_displaytarget *cdt)
 static VkResult
 update_swapchain(struct zink_screen *screen, struct kopper_displaytarget *cdt, unsigned w, unsigned h)
 {
-   fprintf(stderr, "DEBUG: update_swapchain ENTER w=%u h=%u\n", w, h);
    VkResult error = update_caps(screen, cdt);
-   fprintf(stderr, "DEBUG: update_caps returned %d\n", error);
    if (error != VK_SUCCESS)
       return error;
-   fprintf(stderr, "DEBUG: calling kopper_CreateSwapchain\n");
    struct kopper_swapchain *cswap = kopper_CreateSwapchain(screen, cdt, w, h, &error);
-   fprintf(stderr, "DEBUG: kopper_CreateSwapchain returned cswap=%p error=%d\n", (void*)cswap, error);
    if (!cswap)
       return error;
    prune_old_swapchains(screen, cdt, false);
@@ -457,9 +450,7 @@ update_swapchain(struct zink_screen *screen, struct kopper_displaytarget *cdt, u
    *pswap = cdt->swapchain;
    cdt->swapchain = cswap;
 
-   fprintf(stderr, "DEBUG: calling kopper_GetSwapchainImages\n");
    VkResult ret = kopper_GetSwapchainImages(screen, cdt->swapchain);
-   fprintf(stderr, "DEBUG: kopper_GetSwapchainImages returned %d\n", ret);
    return ret;
 }
 
@@ -471,7 +462,6 @@ zink_kopper_displaytarget_create(struct zink_screen *screen, unsigned tex_usage,
 {
    if (!width) width = 1;
    if (!height) height = 1;
-   fprintf(stderr, "DEBUG: ENTERING zink_kopper_displaytarget_create w=%u h=%u\n", width, height);
    struct kopper_displaytarget *cdt;
    const struct kopper_loader_info *info = loader_private;
 
@@ -532,9 +522,7 @@ zink_kopper_displaytarget_create(struct zink_screen *screen, unsigned tex_usage,
       cdt->formats[1] = zink_get_format(screen, srgb);
    }
 
-   fprintf(stderr, "DEBUG: zink_kopper_displaytarget_create calling kopper_CreateSurface w=%u h=%u sType=%u\n", width, height, cdt->info.bos.sType);
    cdt->surface = kopper_CreateSurface(screen, cdt);
-   fprintf(stderr, "DEBUG: kopper_CreateSurface returned surface=%p\n", (void*)cdt->surface);
    if (!cdt->surface)
       goto out;
 
@@ -839,9 +827,7 @@ kopper_present(void *data, void *gdata, int thread_idx)
       cpi->info.pWaitSemaphores = NULL;
       cpi->info.waitSemaphoreCount = 0;
    }
-   fprintf(stderr, "DEBUG: kopper_present calling QueuePresentKHR image=%u swapchain=%p\n", cpi->image, (void*)swapchain);
    VkResult error2 = VKSCR(QueuePresentKHR)(screen->queue, &cpi->info);
-   fprintf(stderr, "DEBUG: QueuePresentKHR returned %d\n", error2);
    zink_screen_debug_marker_end(screen, screen->frame_marker_emitted);
    zink_screen_debug_marker_begin(screen, "frame");
    simple_mtx_unlock(screen->queue_lock);

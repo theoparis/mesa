@@ -295,6 +295,12 @@ util_make_fragment_tex_shader(struct pipe_context *pipe,
       }
    }
 
+   /* Force alpha to 1.0 for float blits - fixes gray screen on Metal where
+    * source FBO may have alpha=0 causing transparent/gray appearance */
+   if (stype == TGSI_RETURN_TYPE_FLOAT) {
+      ureg_MOV(ureg, ureg_writemask(temp, TGSI_WRITEMASK_W), ureg_imm1f(ureg, 1.0f));
+   }
+
    ureg_MOV(ureg, out, ureg_src(temp));
 
    ureg_END( ureg );

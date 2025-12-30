@@ -664,7 +664,7 @@ do_blit(struct vk_command_buffer *cmd,
          .imageView = dst_view,
          .imageLayout = dst_image_layout,
          .loadOp = key->stencil_as_discard ? VK_ATTACHMENT_LOAD_OP_CLEAR :
-                                             VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                             VK_ATTACHMENT_LOAD_OP_LOAD,
          .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
       };
       VkRenderingInfo vk_render = {

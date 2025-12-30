@@ -175,25 +175,21 @@ blit_native(struct zink_context *ctx, const struct pipe_blit_info *info, bool *n
        info->scissor_enable ||
        info->swizzle_enable ||
        info->alpha_blend) {
-      fprintf(stderr, "DEBUG: blit_native rejected: mask/scissor/swizzle/alpha_blend\n");
       return false;
    }
 
    if (info->render_condition_enable &&
        ctx->render_condition_active) {
-      fprintf(stderr, "DEBUG: blit_native rejected: render_condition\n");
       return false;
    }
 
    if (util_format_is_depth_or_stencil(info->dst.format) &&
        (dst_format != info->src.format || info->filter == PIPE_TEX_FILTER_LINEAR)) {
-      fprintf(stderr, "DEBUG: blit_native rejected: depth/stencil format mismatch\n");
       return false;
    }
 
    /* vkCmdBlitImage must not be used for multisampled source or destination images. */
    if (info->src.resource->nr_samples > 1 || info->dst.resource->nr_samples > 1) {
-      fprintf(stderr, "DEBUG: blit_native rejected: multisampled\n");
       return false;
    }
 
@@ -210,27 +206,19 @@ blit_native(struct zink_context *ctx, const struct pipe_blit_info *info, bool *n
                              dst_aspects == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) ? dst_vkformat :
                              vk_format_get_aspect_format(dst_vkformat, dst_aspects);
    if (src->format != zink_get_format(screen, info->src.format) || dst_aspect_fmt != dst_vkformat) {
-      fprintf(stderr, "DEBUG: blit_native rejected: format aspect mismatch src_format=%u vs expected=%u, dst_aspect_fmt=%u vs dst_vkformat=%u\n",
-              src->format, zink_get_format(screen, info->src.format), dst_aspect_fmt, dst_vkformat);
       return false;
    }
    /* TODO: remove this in the future when spec permits to allow single-aspected blits */
    if (src->format != zink_get_format(screen, info->src.format) ||
        dst->format != zink_get_format(screen, info->dst.format)) {
-      fprintf(stderr, "DEBUG: blit_native rejected: format mismatch src->format=%u vs info->src.format=%s, dst->format=%u vs info->dst.format=%s\n",
-              src->format, util_format_short_name(info->src.format),
-              dst->format, util_format_short_name(info->dst.format));
       return false;
    }
    if (src->format != VK_FORMAT_A8_UNORM_KHR && zink_format_is_emulated_alpha(info->src.format)) {
-      fprintf(stderr, "DEBUG: blit_native rejected: emulated alpha\n");
       return false;
    }
 
    if (!(src->obj->vkfeats & VK_FORMAT_FEATURE_BLIT_SRC_BIT) ||
        !(dst->obj->vkfeats & VK_FORMAT_FEATURE_BLIT_DST_BIT)) {
-      fprintf(stderr, "DEBUG: blit_native rejected: missing blit feature bits src=0x%x dst=0x%x\n",
-              src->obj->vkfeats, dst->obj->vkfeats);
       return false;
    }
 
@@ -238,26 +226,20 @@ blit_native(struct zink_context *ctx, const struct pipe_blit_info *info, bool *n
         util_format_is_pure_sint(info->dst.format)) ||
        (util_format_is_pure_uint(info->src.format) !=
         util_format_is_pure_uint(info->dst.format))) {
-      fprintf(stderr, "DEBUG: blit_native rejected: sint/uint mismatch\n");
       return false;
    }
 
    if (info->filter == PIPE_TEX_FILTER_LINEAR &&
        !(src->obj->vkfeats & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
-      fprintf(stderr, "DEBUG: blit_native rejected: linear filter not supported\n");
       return false;
    }
 
-   /* TESTING: Allow format conversion to test alpha=1 fix
-    * Reject blits that require format conversion - kosmickrisp's meta blit
-    * texture sampling via argument buffers has issues
+   /* Reject blits requiring format conversion - use util_blitter instead.
+    * kosmickrisp's vk_meta_blit has intermittent black flashing issues on Metal.
+    * util_blitter goes through the regular Gallium draw path which works. */
    if (info->src.format != info->dst.format) {
-      fprintf(stderr, "DEBUG: blit_native rejected: format conversion needed %s -> %s\n",
-              util_format_short_name(info->src.format),
-              util_format_short_name(info->dst.format));
       return false;
    }
-   */
 
 
    VkImageBlit region = {0};
@@ -373,12 +355,6 @@ blit_native(struct zink_context *ctx, const struct pipe_blit_info *info, bool *n
                                              info->src.box.width, info->src.box.height,
                                              info->dst.box.width, info->dst.box.height);
 
-   fprintf(stderr, "DEBUG: blit_native VkImages: src=%p dst=%p dst_dt_idx=%u dst_is_swapchain=%d\n",
-           (void*)use_src->obj->image,
-           (void*)dst->obj->image,
-           dst->obj->dt_idx,
-           dst->swapchain ? 1 : 0);
-
    VKCTX(CmdBlitImage)(cmdbuf, use_src->obj->image, src->layout,
                   dst->obj->image, dst->layout,
                   1, &region,
@@ -434,13 +410,6 @@ zink_blit(struct pipe_context *pctx,
       dst = dst->transient;
    bool needs_present_readback = false;
 
-   fprintf(stderr, "DEBUG: zink_blit: src=%s %dx%d -> dst=%s %dx%d mask=0x%x\n",
-           util_format_short_name(info->src.format),
-           info->src.box.width, info->src.box.height,
-           util_format_short_name(info->dst.format),
-           info->dst.box.width, info->dst.box.height,
-           info->mask);
-
    if (ctx->awaiting_resolve && ctx->in_rp && ctx->dynamic_fb.tc_info.has_resolve) {
       bool is_depth = util_format_is_depth_or_stencil(info->src.format);
       struct pipe_resource *resolve = ctx->fb_state.resolve;
@@ -470,20 +439,16 @@ zink_blit(struct pipe_context *pctx,
       if (info->src.resource->nr_samples > 1 &&
           info->dst.resource->nr_samples <= 1) {
          if (blit_resolve(ctx, info, &needs_present_readback)) {
-            fprintf(stderr, "DEBUG: blit_resolve succeeded\n");
             goto end;
          }
       } else {
          if (try_copy_region(pctx, info)) {
-            fprintf(stderr, "DEBUG: try_copy_region succeeded\n");
             goto end;
          }
          if (blit_native(ctx, info, &needs_present_readback)) {
-            fprintf(stderr, "DEBUG: blit_native succeeded\n");
             goto end;
          }
       }
-      fprintf(stderr, "DEBUG: using util_blitter fallback\n");
    }
 
 
@@ -637,17 +602,12 @@ zink_blit(struct pipe_context *pctx,
       struct pipe_blit_info new_info = *info;
       new_info.src.resource = &use_src->base.b;
 
-      fprintf(stderr, "DEBUG: zink_blit util_blitter path - srcbox y=%d height=%d\n",
-              new_info.src.box.y, new_info.src.box.height);
-
       /* Fix Y-flip coordinates: when srcbox has y=0 and negative height (Y-flip),
        * the source region would span from y=0 to y=-height which is invalid.
        * Instead, adjust to y=abs(height) with negative height to read from the
        * valid texture region in reverse order (0 to height, flipped). */
       if (new_info.src.box.height < 0 && new_info.src.box.y == 0) {
          new_info.src.box.y = -new_info.src.box.height;
-         fprintf(stderr, "DEBUG: zink_blit fixed Y-flip: src.box.y now %d, height %d\n",
-                 new_info.src.box.y, new_info.src.box.height);
       }
 
       util_blitter_blit(ctx->blitter, &new_info, NULL);
