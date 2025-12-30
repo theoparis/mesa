@@ -123,6 +123,12 @@ if with_dri
     deps_for_egl += [dep_android, idep_u_gralloc]
     files_egl += files('drivers/dri2/platform_android.c')
   endif
+  if with_platform_macos
+    c_args_for_egl += [
+      '-DVK_USE_PLATFORM_METAL_EXT',
+    ]
+    link_args_for_egl += ['-lobjc']
+  endif
 elif with_platform_haiku
   c_args_for_egl += [
     '-D_EGL_BUILT_IN_DRIVER_HAIKU',

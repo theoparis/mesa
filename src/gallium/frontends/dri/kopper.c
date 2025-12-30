@@ -240,6 +240,12 @@ kopper_allocate_textures(struct dri_context *ctx,
    width  = drawable->w;
    height = drawable->h;
 
+   /* Clamp to 1 to prevent 0-sized resources (e.g. MSAA/transient buffers)
+    * from crashing vk_image_init when the window is initially 0x0.
+    */
+   if (!width) width = 1;
+   if (!height) height = 1;
+
    resized = (drawable->old_w != width ||
               drawable->old_h != height);
 

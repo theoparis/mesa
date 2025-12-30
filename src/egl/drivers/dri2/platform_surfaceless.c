@@ -34,21 +34,53 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "dri_screen.h"
+#include "dri_util.h"
 #include "egl_dri2.h"
 #include "eglglobals.h"
 #include "kopper_interface.h"
 #include "loader.h"
 #include "loader_dri_helper.h"
-#include "dri_util.h"
-#include "dri_screen.h"
+
+#if defined(__APPLE__) && defined(VK_USE_PLATFORM_METAL_EXT)
+#include <execinfo.h>
+#include <pthread.h>
+#include <signal.h>
+#include <dispatch/dispatch.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
+#include <vulkan/vulkan_metal.h>
+
+static void
+crash_handler(int sig)
+{
+   void *array[50];
+   int size = backtrace(array, 50);
+   fprintf(stderr, "\n\n=== CRASH HANDLER: Signal %d ===\n", sig);
+   fprintf(stderr, "Stack trace:\n");
+   backtrace_symbols_fd(array, size, STDERR_FILENO);
+   fprintf(stderr, "=== END STACK TRACE ===\n\n");
+   signal(sig, SIG_DFL);
+   raise(sig);
+}
+
+__attribute__((constructor)) static void
+install_crash_handler(void)
+{
+   signal(SIGSEGV, crash_handler);
+   signal(SIGBUS, crash_handler);
+   signal(SIGABRT, crash_handler);
+   fprintf(stderr, "DEBUG: Crash handler installed\n");
+}
+#endif
 
 static struct dri_image *
 surfaceless_alloc_image(struct dri2_egl_display *dri2_dpy,
                         struct dri2_egl_surface *dri2_surf)
 {
-   return dri_create_image(
-      dri2_dpy->dri_screen_render_gpu, dri2_surf->base.Width,
-      dri2_surf->base.Height, dri2_surf->visual, NULL, 0, 0, NULL);
+   return dri_create_image(dri2_dpy->dri_screen_render_gpu,
+                           dri2_surf->base.Width, dri2_surf->base.Height,
+                           dri2_surf->visual, NULL, 0, 0, NULL);
 }
 
 static void
@@ -64,9 +96,9 @@ surfaceless_free_images(struct dri2_egl_surface *dri2_surf)
 }
 
 static int
-surfaceless_image_get_buffers(struct dri_drawable *driDrawable, unsigned int format,
-                              uint32_t *stamp, void *loaderPrivate,
-                              uint32_t buffer_mask,
+surfaceless_image_get_buffers(struct dri_drawable *driDrawable,
+                              unsigned int format, uint32_t *stamp,
+                              void *loaderPrivate, uint32_t buffer_mask,
                               struct __DRIimageList *buffers)
 {
    struct dri2_egl_surface *dri2_surf = loaderPrivate;
@@ -180,8 +212,91 @@ static const struct dri2_egl_display_vtbl dri2_surfaceless_display_vtbl = {
    .get_dri_drawable = dri2_surface_get_dri_drawable,
 };
 
+#ifdef __APPLE__
+/* macOS window surface functions for Kopper/Metal */
+
+static _EGLSurface *
+dri2_surfaceless_create_window_surface(_EGLDisplay *disp, _EGLConfig *conf,
+                                       void *native_window,
+                                       const EGLint *attrib_list)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   struct dri2_egl_config *dri2_conf = dri2_egl_config(conf);
+   struct dri2_egl_surface *dri2_surf;
+   const struct dri_config *config;
+
+   dri2_surf = calloc(1, sizeof *dri2_surf);
+   if (!dri2_surf) {
+      _eglError(EGL_BAD_ALLOC, "eglCreateWindowSurface");
+      return NULL;
+   }
+
+   if (!dri2_init_surface(&dri2_surf->base, disp, EGL_WINDOW_BIT, conf,
+                          attrib_list, false, native_window))
+      goto cleanup_surface;
+
+   config = dri2_get_dri_config(dri2_conf, EGL_WINDOW_BIT,
+                                dri2_surf->base.GLColorspace);
+   if (!config) {
+      _eglError(EGL_BAD_MATCH,
+                "Unsupported surfacetype/colorspace configuration");
+      goto cleanup_surface;
+   }
+
+   dri2_surf->visual = dri2_image_format_for_pbuffer_config(dri2_dpy, config);
+   if (dri2_surf->visual == PIPE_FORMAT_NONE)
+      goto cleanup_surface;
+
+   if (!dri2_create_drawable(dri2_dpy, config, dri2_surf, dri2_surf))
+      goto cleanup_surface;
+
+   return &dri2_surf->base;
+
+cleanup_surface:
+   free(dri2_surf);
+   return NULL;
+}
+
+static EGLBoolean
+dri2_surfaceless_kopper_swap_buffers(_EGLDisplay *disp, _EGLSurface *draw)
+{
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(draw);
+   kopperSwapBuffers(dri2_surf->dri_drawable,
+                     __DRI2_FLUSH_CONTEXT | __DRI2_FLUSH_INVALIDATE_ANCILLARY);
+   return EGL_TRUE;
+}
+
+static EGLBoolean
+dri2_surfaceless_kopper_swap_interval(_EGLDisplay *disp, _EGLSurface *surf,
+                                      EGLint interval)
+{
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
+   kopperSetSwapInterval(dri2_surf->dri_drawable, interval);
+   return EGL_TRUE;
+}
+
+static EGLint
+dri2_surfaceless_kopper_query_buffer_age(_EGLDisplay *disp, _EGLSurface *surf)
+{
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
+   return kopperQueryBufferAge(dri2_surf->dri_drawable);
+}
+
+static const struct dri2_egl_display_vtbl dri2_surfaceless_metal_display_vtbl = {
+   .create_window_surface = dri2_surfaceless_create_window_surface,
+   .create_pbuffer_surface = dri2_surfaceless_create_pbuffer_surface,
+   .destroy_surface = surfaceless_destroy_surface,
+   .create_image = dri2_create_image_khr,
+   .swap_buffers = dri2_surfaceless_kopper_swap_buffers,
+   .swap_interval = dri2_surfaceless_kopper_swap_interval,
+   .query_buffer_age = dri2_surfaceless_kopper_query_buffer_age,
+   .get_dri_drawable = dri2_surface_get_dri_drawable,
+};
+#endif /* __APPLE__ */
+
 static void
-surfaceless_flush_front_buffer(struct dri_drawable *driDrawable, void *loaderPrivate)
+surfaceless_flush_front_buffer(struct dri_drawable *driDrawable,
+                               void *loaderPrivate)
 {
 }
 
@@ -207,18 +322,287 @@ static const __DRIimageLoaderExtension image_loader_extension = {
 };
 
 static const __DRIextension *image_loader_extensions[] = {
-   &image_loader_extension.base,  &image_lookup_extension.base, NULL,
+   &image_loader_extension.base,
+   &image_lookup_extension.base,
+   NULL,
 };
 
 static const __DRIextension *swrast_loader_extensions[] = {
-   &swrast_pbuffer_loader_extension.base, &image_loader_extension.base,
-   &image_lookup_extension.base, NULL,
+   &swrast_pbuffer_loader_extension.base,
+   &image_loader_extension.base,
+   &image_lookup_extension.base,
+   NULL,
 };
 
 static const __DRIextension *kopper_loader_extensions[] = {
-   &kopper_pbuffer_loader_extension.base, &image_lookup_extension.base,
-   &image_lookup_extension.base, NULL,
+   &kopper_pbuffer_loader_extension.base,
+   &image_lookup_extension.base,
+   &image_lookup_extension.base,
+   NULL,
 };
+
+#ifdef __APPLE__
+/* macOS Metal window surface support for Kopper */
+
+#ifdef VK_USE_PLATFORM_METAL_EXT
+
+struct get_size_ctx {
+   void *layer;
+   double w;
+   double h;
+};
+
+static void
+get_drawable_size_main_thread(void *data)
+{
+   struct get_size_ctx *ctx = data;
+   typedef struct {
+      double width;
+      double height;
+   } MGLSize;
+
+   /* Check superlayer to verify attachment */
+   id superlayer = ((id(*)(id, SEL))objc_msgSend)(
+      (id)ctx->layer, sel_registerName("superlayer"));
+   fprintf(stderr, "DEBUG: get_drawable_info superlayer=%p\n", superlayer);
+
+   MGLSize (*msgSendSize)(id, SEL) = (MGLSize(*)(id, SEL))objc_msgSend;
+   MGLSize size = msgSendSize((id)ctx->layer, sel_registerName("drawableSize"));
+   ctx->w = size.width;
+   ctx->h = size.height;
+}
+
+static void
+surfaceless_metal_kopper_get_drawable_info(struct dri_drawable *draw, int *w,
+                                           int *h, void *loaderPrivate)
+{
+   struct dri2_egl_surface *dri2_surf = loaderPrivate;
+   void *layer = dri2_surf->base.NativeSurface;
+
+   if (layer) {
+      /* Debugging SIGBUS: Validate layer state */
+      fprintf(stderr, "DEBUG: get_drawable_info layer=%p\n", layer);
+
+      /* Check class */
+      const char *cls = object_getClassName((id)layer);
+      fprintf(stderr, "DEBUG: get_drawable_info class=%s\n", cls);
+
+      /* Check device property */
+      id device =
+         ((id(*)(id, SEL))objc_msgSend)((id)layer, sel_registerName("device"));
+      fprintf(stderr, "DEBUG: get_drawable_info device=%p\n", device);
+
+      /* [layer drawableSize] */
+      /* Query on Main Thread to avoid race conditions with CoreAnimation which
+       * can cause SIGBUS */
+
+      struct get_size_ctx ctx;
+      ctx.layer = layer;
+      ctx.w = 0;
+      ctx.h = 0;
+
+      if (pthread_main_np()) {
+         get_drawable_size_main_thread(&ctx);
+      } else {
+         dispatch_sync_f(dispatch_get_main_queue(), &ctx,
+                         get_drawable_size_main_thread);
+      }
+
+      fprintf(stderr, "DEBUG: get_drawable_info size=%fx%f\n", ctx.w, ctx.h);
+      fprintf(stderr, "DEBUG: get_drawable_info EXIT\n");
+      *w = (int)ctx.w;
+      *h = (int)ctx.h;
+   } else {
+      *w = dri2_surf->base.Width;
+      *h = dri2_surf->base.Height;
+      fprintf(stderr, "DEBUG: get_drawable_info NULL layer, returning %dx%d\n",
+              *w, *h);
+   }
+}
+
+#include <objc/message.h>
+#include <objc/runtime.h>
+
+struct swap_layer_ctx {
+   void *layer;
+   void *result_layer;
+};
+
+static void
+swap_layer_on_main_thread(void *data)
+{
+   struct swap_layer_ctx *ctx = data;
+   void *lblayer = ctx->layer;
+   if (!lblayer)
+      return;
+
+   const char *className = object_getClassName((id)lblayer);
+   fprintf(stderr, "DEBUG: NativeSurface class: %s\n", className);
+
+   if (strcmp(className, "NSViewBackingLayer") == 0 ||
+       strcmp(className, "_NSViewBackingLayer") == 0) {
+      /* Get the view from the layer's delegate */
+      id view = ((id(*)(id, SEL))objc_msgSend)((id)lblayer,
+                                               sel_registerName("delegate"));
+
+      if (view) {
+         fprintf(stderr, "DEBUG: Found delegate view class: %s\n",
+                 object_getClassName(view));
+
+         /* [view setWantsLayer:YES] */
+         ((void (*)(id, SEL, BOOL))objc_msgSend)(
+            view, sel_registerName("setWantsLayer:"), 1);
+
+         /* id newLayer = [CAMetalLayer layer] */
+         Class CAMetalLayerClass = objc_getClass("CAMetalLayer");
+         if (CAMetalLayerClass) {
+            id newLayer = ((id(*)(id, SEL))objc_msgSend)(
+               (id)CAMetalLayerClass, sel_registerName("layer"));
+
+            if (newLayer) {
+               /* Configure the layer to match the view's dimensions and scale */
+               /* CGRect bounds = [view bounds] */
+               typedef struct {
+                  double x, y, w, h;
+               } MGLRect;
+               MGLRect (*msgSendRect)(id, SEL) =
+                  (MGLRect(*)(id, SEL))objc_msgSend;
+               MGLRect viewBounds =
+                  msgSendRect(view, sel_registerName("bounds"));
+               fprintf(stderr, "DEBUG: view bounds: %f,%f %fx%f\n",
+                       viewBounds.x, viewBounds.y, viewBounds.w, viewBounds.h);
+
+               /* [newLayer setFrame:viewBounds] */
+               void (*msgSendRect_v)(id, SEL, MGLRect) =
+                  (void (*)(id, SEL, MGLRect))objc_msgSend;
+               msgSendRect_v(newLayer, sel_registerName("setFrame:"),
+                             viewBounds);
+
+               /* Get window's backingScaleFactor for Retina display support */
+               /* id window = [view window] */
+               id window = ((id(*)(id, SEL))objc_msgSend)(
+                  view, sel_registerName("window"));
+               double scale = 1.0;
+               if (window) {
+                  /* CGFloat scale = [window backingScaleFactor] */
+                  double (*msgSendDouble)(id, SEL) =
+                     (double (*)(id, SEL))objc_msgSend;
+                  scale = msgSendDouble(window,
+                                        sel_registerName("backingScaleFactor"));
+                  fprintf(stderr, "DEBUG: window backingScaleFactor: %f\n",
+                          scale);
+
+                  /* [newLayer setContentsScale:scale] */
+                  void (*msgSendDouble_v)(id, SEL, double) =
+                     (void (*)(id, SEL, double))objc_msgSend;
+                  msgSendDouble_v(newLayer,
+                                  sel_registerName("setContentsScale:"), scale);
+               }
+
+               /* Explicitly set drawableSize to match the backing store size.
+                * CAMetalLayer.drawableSize = view.bounds.size * contentsScale
+                * If we don't set this, drawableSize might return 1x1 until
+                * the next layout pass.
+                */
+               typedef struct {
+                  double w, h;
+               } MGLSize;
+               MGLSize drawableSize;
+               drawableSize.w = viewBounds.w * scale;
+               drawableSize.h = viewBounds.h * scale;
+               fprintf(stderr, "DEBUG: setting drawableSize: %fx%f\n",
+                       drawableSize.w, drawableSize.h);
+               void (*msgSendSize_v)(id, SEL, MGLSize) =
+                  (void (*)(id, SEL, MGLSize))objc_msgSend;
+               msgSendSize_v(newLayer, sel_registerName("setDrawableSize:"),
+                             drawableSize);
+
+               /* [view setLayer:newLayer] */
+               ((void (*)(id, SEL, id))objc_msgSend)(
+                  view, sel_registerName("setLayer:"), newLayer);
+
+               /* Explicitly RETAIN the layer to ensure it survives.
+                * platform_surfaceless doesn't normally own the window,
+                * but here we created the layer. We need to ensure
+                * dri2_surf->base.NativeSurface remains valid.
+                */
+               ((id(*)(id, SEL))objc_msgSend)(newLayer,
+                                              sel_registerName("retain"));
+
+               ctx->result_layer = newLayer; /* Pass back the new layer */
+               fprintf(stderr, "DEBUG: Replaced NSViewBackingLayer with "
+                               "CAMetalLayer (Retained)\n");
+            } else {
+               fprintf(stderr, "DEBUG: Failed to create CAMetalLayer\n");
+            }
+         } else {
+            fprintf(stderr, "DEBUG: CAMetalLayer class not found!\n");
+         }
+      }
+   }
+}
+
+static void
+surfaceless_metal_kopper_set_surface_create_info(void *_draw,
+                                                 struct kopper_loader_info *ci)
+{
+   struct dri2_egl_surface *dri2_surf = _draw;
+   VkMetalSurfaceCreateInfoEXT *metal = (VkMetalSurfaceCreateInfoEXT *)&ci->bos;
+
+   if (dri2_surf->base.Type != EGL_WINDOW_BIT)
+      return;
+
+   metal->sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+   metal->pNext = NULL;
+   metal->flags = 0;
+
+   void *layer = dri2_surf->base.NativeSurface;
+
+   /* Fix for KosmicKrisp/wsi_metal_surface crash:
+    * If we receive an NSViewBackingLayer (generic default layer), we need to
+    * force the view to use a CAMetalLayer instead.
+    * This MUST be done on the Main Thread to avoid SIGBUS/race conditions.
+    */
+   if (layer) {
+      struct swap_layer_ctx ctx;
+      ctx.layer = layer;
+      ctx.result_layer = layer;
+
+      /* Avoid deadlock if we are already on the main thread */
+      if (pthread_main_np()) {
+         swap_layer_on_main_thread(&ctx);
+      } else {
+         dispatch_sync_f(dispatch_get_main_queue(), &ctx,
+                         swap_layer_on_main_thread);
+      }
+
+      if (layer != ctx.result_layer) {
+         layer = ctx.result_layer;
+         dri2_surf->base.NativeSurface =
+            layer; /* Update state for git_drawable_info */
+      }
+   }
+
+   /* The native window is the CAMetalLayer pointer */
+   metal->pLayer = layer;
+   ci->has_alpha = true; /* Assume alpha support */
+   ci->present_opaque = dri2_surf->base.PresentOpaque;
+}
+
+static const __DRIkopperLoaderExtension kopper_metal_loader_extension = {
+   .base = {__DRI_KOPPER_LOADER, 1},
+
+   .SetSurfaceCreateInfo = surfaceless_metal_kopper_set_surface_create_info,
+   .GetDrawableInfo = surfaceless_metal_kopper_get_drawable_info,
+};
+
+static const __DRIextension *kopper_metal_loader_extensions[] = {
+   &kopper_metal_loader_extension.base,
+   &image_lookup_extension.base,
+   NULL,
+};
+#endif /* VK_USE_PLATFORM_METAL_EXT */
+#endif /* __APPLE__ */
 
 static bool
 surfaceless_probe_device(_EGLDisplay *disp, bool swrast, bool zink)
@@ -255,8 +639,9 @@ surfaceless_probe_device(_EGLDisplay *disp, bool swrast, bool zink)
          dri2_dpy->device_name =
             loader_get_device_name_for_fd(dri2_dpy->fd_render_gpu);
          if (!dri2_dpy->device_name) {
-            _eglError(EGL_BAD_ALLOC, "surfaceless-egl: failed to get device name "
-                                     "for requested GPU");
+            _eglError(EGL_BAD_ALLOC,
+                      "surfaceless-egl: failed to get device name "
+                      "for requested GPU");
             goto retry;
          }
       }
@@ -302,9 +687,12 @@ surfaceless_probe_device(_EGLDisplay *disp, bool swrast, bool zink)
 
          if (!dri2_dpy->dri_screen_render_gpu->base.screen->caps.graphics) {
 
-            _eglLog(_EGL_DEBUG, "DRI2: Driver %s doesn't support graphics, skipping.", dri2_dpy->driver_name);
+            _eglLog(_EGL_DEBUG,
+                    "DRI2: Driver %s doesn't support graphics, skipping.",
+                    dri2_dpy->driver_name);
 
-            if (dri2_dpy->dri_screen_display_gpu != dri2_dpy->dri_screen_render_gpu) {
+            if (dri2_dpy->dri_screen_display_gpu !=
+                dri2_dpy->dri_screen_render_gpu) {
                driDestroyScreen(dri2_dpy->dri_screen_display_gpu);
                dri2_dpy->dri_screen_display_gpu = NULL;
             }
@@ -360,9 +748,13 @@ surfaceless_probe_device_sw(_EGLDisplay *disp)
 
    dri2_detect_swrast_kopper(disp);
 
-   if (dri2_dpy->kopper)
+   if (dri2_dpy->kopper) {
+#if defined(__APPLE__) && defined(VK_USE_PLATFORM_METAL_EXT)
+      dri2_dpy->loader_extensions = kopper_metal_loader_extensions;
+#else
       dri2_dpy->loader_extensions = kopper_loader_extensions;
-   else
+#endif
+   } else
       dri2_dpy->loader_extensions = swrast_loader_extensions;
 
    dri2_dpy->fd_display_gpu = dri2_dpy->fd_render_gpu;
@@ -389,7 +781,16 @@ dri2_initialize_surfaceless(_EGLDisplay *disp)
     */
    driver_loaded = surfaceless_probe_device(disp, disp->Options.ForceSoftware,
                                             disp->Options.Zink);
-   if (!driver_loaded && disp->Options.ForceSoftware) {
+   /* On macOS (Darwin) or when ForceSoftware is set, fall back to swrast/zink
+    * if no DRM devices were found.
+    */
+   if (!driver_loaded &&
+       (disp->Options.ForceSoftware
+#ifdef __APPLE__
+        ||
+        true /* Always try fallback on macOS since there are no DRM devices */
+#endif
+        )) {
       _eglLog(_EGL_DEBUG, "Falling back to surfaceless swrast without DRM.");
       driver_loaded = surfaceless_probe_device_sw(disp);
    }
@@ -408,10 +809,27 @@ dri2_initialize_surfaceless(_EGLDisplay *disp)
 
    dri2_add_pbuffer_configs_for_visuals(disp);
 
+#ifdef __APPLE__
+   /* On macOS, also add window configs when kopper is enabled so that
+    * window surfaces can be created via the kopper/Metal presentation path.
+    */
+   if (dri2_dpy->kopper) {
+      for (unsigned i = 0; dri2_dpy->driver_configs[i] != NULL; i++) {
+         dri2_add_config(disp, dri2_dpy->driver_configs[i],
+                         EGL_WINDOW_BIT | EGL_PBUFFER_BIT, NULL);
+      }
+   }
+#endif
+
    /* Fill vtbl last to prevent accidentally calling virtual function during
     * initialization.
     */
-   dri2_dpy->vtbl = &dri2_surfaceless_display_vtbl;
+#if defined(__APPLE__) && defined(VK_USE_PLATFORM_METAL_EXT)
+   if (dri2_dpy->kopper)
+      dri2_dpy->vtbl = &dri2_surfaceless_metal_display_vtbl;
+   else
+#endif
+      dri2_dpy->vtbl = &dri2_surfaceless_display_vtbl;
 
    return EGL_TRUE;
 

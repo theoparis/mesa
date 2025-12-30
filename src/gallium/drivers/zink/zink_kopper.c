@@ -23,12 +23,18 @@
  */
 
 #include "util/detect_os.h"
+#include <stdio.h>
 
 #include "zink_context.h"
 #include "zink_screen.h"
 #include "zink_surface.h"
 #include "zink_resource.h"
 #include "zink_kopper.h"
+
+#if defined(__APPLE__)
+#define VK_USE_PLATFORM_METAL_EXT
+#include <vulkan/vulkan_metal.h>
+#endif
 
 static void
 zink_kopper_set_present_mode_for_interval(struct kopper_displaytarget *cdt, int interval)
@@ -80,6 +86,11 @@ init_dt_type(struct kopper_displaytarget *cdt)
       cdt->type = KOPPER_WIN32;
       break;
 #endif
+#ifdef VK_USE_PLATFORM_METAL_EXT
+   case VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT:
+      cdt->type = KOPPER_METAL;
+      break;
+#endif
    default:
       UNREACHABLE("unsupported!");
    }
@@ -119,6 +130,20 @@ kopper_CreateSurface(struct zink_screen *screen, struct kopper_displaytarget *cd
       break;
    }
 #endif
+#ifdef VK_USE_PLATFORM_METAL_EXT
+   case VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT: {
+      VkMetalSurfaceCreateInfoEXT *metal = (VkMetalSurfaceCreateInfoEXT *)&cdt->info.bos;
+      PFN_vkCreateMetalSurfaceEXT createMetalSurfaceEXT = (PFN_vkCreateMetalSurfaceEXT)VKSCR(GetInstanceProcAddr)(screen->instance, "vkCreateMetalSurfaceEXT");
+      if (createMetalSurfaceEXT) {
+         error = createMetalSurfaceEXT(screen->instance, metal, NULL, &surface);
+         fprintf(stderr, "DEBUG: vkCreateMetalSurfaceEXT returned %d, surface=%p, pLayer=%p\n", error, (void*)surface, metal->pLayer);
+      } else {
+         fprintf(stderr, "DEBUG: vkCreateMetalSurfaceEXT not found!\n");
+         error = VK_ERROR_EXTENSION_NOT_PRESENT;
+      }
+      break;
+   }
+#endif
    default:
       UNREACHABLE("unsupported!");
    }
@@ -128,6 +153,7 @@ kopper_CreateSurface(struct zink_screen *screen, struct kopper_displaytarget *cd
 
    VkBool32 supported;
    error = VKSCR(GetPhysicalDeviceSurfaceSupportKHR)(screen->pdev, screen->gfx_queue, surface, &supported);
+   fprintf(stderr, "DEBUG: GetPhysicalDeviceSurfaceSupportKHR error=%d supported=%d\n", error, supported);
    if (!zink_screen_handle_vkresult(screen, error) || !supported)
       goto fail;
 
@@ -235,6 +261,13 @@ find_dt_entry(struct zink_screen *screen, const struct kopper_displaytarget *cdt
       break;
    }
 #endif
+#ifdef VK_USE_PLATFORM_METAL_EXT
+   case KOPPER_METAL: {
+      VkMetalSurfaceCreateInfoEXT *metal = (VkMetalSurfaceCreateInfoEXT *)&cdt->info.bos;
+      he = _mesa_hash_table_search(&screen->dts, (void*)metal->pLayer);
+      break;
+   }
+#endif
    default:
       UNREACHABLE("unsupported!");
    }
@@ -332,6 +365,7 @@ kopper_CreateSwapchain(struct zink_screen *screen, struct kopper_displaytarget *
       }
       break;
    case KOPPER_WAYLAND:
+   case KOPPER_METAL:
       /* On Wayland, currentExtent is the special value (0xFFFFFFFF, 0xFFFFFFFF), indicating that the
        * surface size will be determined by the extent of a swapchain targeting the surface. Whatever the
        * application sets a swapchain’s imageExtent to will be the size of the window, after the first image is
@@ -406,10 +440,14 @@ update_caps(struct zink_screen *screen, struct kopper_displaytarget *cdt)
 static VkResult
 update_swapchain(struct zink_screen *screen, struct kopper_displaytarget *cdt, unsigned w, unsigned h)
 {
+   fprintf(stderr, "DEBUG: update_swapchain ENTER w=%u h=%u\n", w, h);
    VkResult error = update_caps(screen, cdt);
+   fprintf(stderr, "DEBUG: update_caps returned %d\n", error);
    if (error != VK_SUCCESS)
       return error;
+   fprintf(stderr, "DEBUG: calling kopper_CreateSwapchain\n");
    struct kopper_swapchain *cswap = kopper_CreateSwapchain(screen, cdt, w, h, &error);
+   fprintf(stderr, "DEBUG: kopper_CreateSwapchain returned cswap=%p error=%d\n", (void*)cswap, error);
    if (!cswap)
       return error;
    prune_old_swapchains(screen, cdt, false);
@@ -419,7 +457,10 @@ update_swapchain(struct zink_screen *screen, struct kopper_displaytarget *cdt, u
    *pswap = cdt->swapchain;
    cdt->swapchain = cswap;
 
-   return kopper_GetSwapchainImages(screen, cdt->swapchain);
+   fprintf(stderr, "DEBUG: calling kopper_GetSwapchainImages\n");
+   VkResult ret = kopper_GetSwapchainImages(screen, cdt->swapchain);
+   fprintf(stderr, "DEBUG: kopper_GetSwapchainImages returned %d\n", ret);
+   return ret;
 }
 
 struct kopper_displaytarget *
@@ -428,6 +469,9 @@ zink_kopper_displaytarget_create(struct zink_screen *screen, unsigned tex_usage,
                                  unsigned height, unsigned alignment,
                                  const void *loader_private, unsigned *stride)
 {
+   if (!width) width = 1;
+   if (!height) height = 1;
+   fprintf(stderr, "DEBUG: ENTERING zink_kopper_displaytarget_create w=%u h=%u\n", width, height);
    struct kopper_displaytarget *cdt;
    const struct kopper_loader_info *info = loader_private;
 
@@ -444,6 +488,7 @@ zink_kopper_displaytarget_create(struct zink_screen *screen, unsigned tex_usage,
             break;
          case KOPPER_WAYLAND:
          case KOPPER_WIN32:
+         case KOPPER_METAL:
             _mesa_hash_table_init(&screen->dts, screen, _mesa_hash_pointer, _mesa_key_pointer_equal);
             break;
          default:
@@ -486,7 +531,9 @@ zink_kopper_displaytarget_create(struct zink_screen *screen, unsigned tex_usage,
       cdt->formats[1] = zink_get_format(screen, srgb);
    }
 
+   fprintf(stderr, "DEBUG: zink_kopper_displaytarget_create calling kopper_CreateSurface w=%u h=%u sType=%u\n", width, height, cdt->info.bos.sType);
    cdt->surface = kopper_CreateSurface(screen, cdt);
+   fprintf(stderr, "DEBUG: kopper_CreateSurface returned surface=%p\n", (void*)cdt->surface);
    if (!cdt->surface)
       goto out;
 
@@ -513,6 +560,13 @@ zink_kopper_displaytarget_create(struct zink_screen *screen, unsigned tex_usage,
    case KOPPER_WIN32: {
       VkWin32SurfaceCreateInfoKHR *win32 = (VkWin32SurfaceCreateInfoKHR *)&cdt->info.bos;
       _mesa_hash_table_insert(&screen->dts, win32->hwnd, cdt);
+      break;
+   }
+#endif
+#ifdef VK_USE_PLATFORM_METAL_EXT
+   case KOPPER_METAL: {
+      VkMetalSurfaceCreateInfoEXT *metal = (VkMetalSurfaceCreateInfoEXT *)&cdt->info.bos;
+      _mesa_hash_table_insert(&screen->dts, (void*)metal->pLayer, cdt);
       break;
    }
 #endif
@@ -784,7 +838,9 @@ kopper_present(void *data, void *gdata, int thread_idx)
       cpi->info.pWaitSemaphores = NULL;
       cpi->info.waitSemaphoreCount = 0;
    }
+   fprintf(stderr, "DEBUG: kopper_present calling QueuePresentKHR image=%u swapchain=%p\n", cpi->image, (void*)swapchain);
    VkResult error2 = VKSCR(QueuePresentKHR)(screen->queue, &cpi->info);
+   fprintf(stderr, "DEBUG: QueuePresentKHR returned %d\n", error2);
    zink_screen_debug_marker_end(screen, screen->frame_marker_emitted);
    zink_screen_debug_marker_begin(screen, "frame");
    simple_mtx_unlock(screen->queue_lock);

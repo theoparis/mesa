@@ -651,7 +651,7 @@ _eglComputeVersion(_EGLDisplay *disp)
        disp->Extensions.KHR_surfaceless_context)
       disp->Version = 15;
 
-      /* For Android P and below limit the EGL version to 1.4 */
+   /* For Android P and below limit the EGL version to 1.4 */
 #if DETECT_OS_ANDROID && ANDROID_API_LEVEL <= 28
    disp->Version = 14;
 #endif
@@ -979,8 +979,7 @@ eglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx)
        !draw_surf->ProtectedContent)
       RETURN_EGL_ERROR(disp, EGL_BAD_ACCESS, EGL_FALSE);
 
-   egl_relax (disp,
-              draw_surf ? &draw_surf->Resource : NULL,
+   egl_relax (disp, draw_surf ? &draw_surf->Resource : NULL,
               read_surf ? &read_surf->Resource : NULL,
               context ? &context->Resource : NULL) {
       ret = disp->Driver->MakeCurrent(disp, draw_surf, read_surf, context);
@@ -1045,19 +1044,30 @@ _eglCreateWindowSurfaceCommon(_EGLDisplay *disp, EGLConfig config,
 
    if (disp && (disp->Platform == _EGL_PLATFORM_SURFACELESS ||
                 disp->Platform == _EGL_PLATFORM_DEVICE)) {
-      /* From the EGL_MESA_platform_surfaceless spec (v1):
-       *
-       *    eglCreatePlatformWindowSurface fails when called with a <display>
-       *    that belongs to the surfaceless platform. It returns
-       *    EGL_NO_SURFACE and generates EGL_BAD_NATIVE_WINDOW. The
-       *    justification for this unconditional failure is that the
-       *    surfaceless platform has no native windows, and therefore the
-       *    <native_window> parameter is always invalid.
-       *
-       * This check must occur before checking the EGLConfig, which emits
-       * EGL_BAD_CONFIG.
+#ifdef __APPLE__
+      /* On macOS, allow window surfaces on surfaceless platform when using
+       * kopper. The kopper interface handles Metal swapchain presentation
+       * for window surfaces.
        */
-      RETURN_EGL_ERROR(disp, EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
+      if (disp->Platform == _EGL_PLATFORM_SURFACELESS) {
+         /* Allow window surface for kopper on macOS - don't return error */
+      } else
+#endif
+      {
+         /* From the EGL_MESA_platform_surfaceless spec (v1):
+          *
+          *    eglCreatePlatformWindowSurface fails when called with a <display>
+          *    that belongs to the surfaceless platform. It returns
+          *    EGL_NO_SURFACE and generates EGL_BAD_NATIVE_WINDOW. The
+          *    justification for this unconditional failure is that the
+          *    surfaceless platform has no native windows, and therefore the
+          *    <native_window> parameter is always invalid.
+          *
+          * This check must occur before checking the EGLConfig, which emits
+          * EGL_BAD_CONFIG.
+          */
+         RETURN_EGL_ERROR(disp, EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
+      }
    }
 
    _EGL_CHECK_CONFIG(disp, conf, EGL_NO_SURFACE);
@@ -2675,11 +2685,8 @@ eglQueryDeviceAttribEXT(EGLDeviceEXT device, EGLint attribute, EGLAttrib *value)
 }
 
 static EGLBoolean EGLAPIENTRY
-eglQueryDeviceBinaryEXT(EGLDeviceEXT device,
-                        EGLint name,
-                        EGLint max_size,
-                        void *value,
-                        EGLint *size)
+eglQueryDeviceBinaryEXT(EGLDeviceEXT device, EGLint name, EGLint max_size,
+                        void *value, EGLint *size)
 {
    _EGLDevice *dev = _eglLookupDevice(device);
 
@@ -2687,7 +2694,8 @@ eglQueryDeviceBinaryEXT(EGLDeviceEXT device,
    if (!dev)
       RETURN_EGL_ERROR(NULL, EGL_BAD_DEVICE_EXT, EGL_FALSE);
 
-   RETURN_EGL_EVAL(NULL, _eglQueryDeviceBinaryEXT(dev, name, max_size, value, size));
+   RETURN_EGL_EVAL(NULL,
+                   _eglQueryDeviceBinaryEXT(dev, name, max_size, value, size));
 }
 
 static const char *EGLAPIENTRY

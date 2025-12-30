@@ -264,6 +264,7 @@ enum zink_debug {
    ZINK_DEBUG_NOGENERAL = (1<<22),
    ZINK_DEBUG_RPSTORES = (1<<23),
    ZINK_DEBUG_PERFINFO = (1<<24),
+   ZINK_DEBUG_DUMMYDES = (1<<24),
 };
 
 enum zink_pv_emulation_primitive {

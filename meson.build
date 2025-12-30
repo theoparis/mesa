@@ -375,6 +375,10 @@ if with_gallium and (system_has_kms_drm or (with_gallium_zink and (freedreno_kmd
     with_dri = true
   endif
 endif
+# Enable DRI for macOS with EGL surfaceless (for Zink/Kopper)
+if host_machine.system() == 'darwin' and with_gallium and get_option('egl').enabled()
+  with_dri = true
+endif
 
 with_any_broadcom = [
   with_gallium_vc4,
