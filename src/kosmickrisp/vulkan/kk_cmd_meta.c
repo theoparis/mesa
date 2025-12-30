@@ -86,6 +86,9 @@ struct kk_meta_save {
    struct kk_buffer_address desc0_set_addr;
    bool has_push_desc0;
    uint8_t push[KK_MAX_PUSH_SIZE];
+   /* Save render pass state that meta operations modify */
+   mtl_render_pass_descriptor *render_pass_descriptor;
+   struct kk_rendering_state render;
 };
 
 static void
@@ -107,6 +110,12 @@ kk_meta_begin(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
       save->pipeline.gfx.occlusion = cmd->state.gfx.occlusion.mode;
       save->pipeline.gfx.is_ds_dynamic =
          cmd->state.gfx.is_depth_stencil_dynamic;
+      /* Save render pass state */
+      save->render_pass_descriptor = cmd->state.gfx.render_pass_descriptor;
+      save->render = cmd->state.gfx.render;
+
+      /* Reset all graphics state to ensure clean state for meta operations */
+      kk_cmd_buffer_dirty_all_gfx(cmd);
 
       cmd->state.gfx.is_depth_stencil_dynamic = false;
       cmd->state.gfx.depth_stencil_state = NULL;
@@ -176,7 +185,14 @@ kk_meta_end(struct kk_cmd_buffer *cmd, struct kk_meta_save *save,
       cmd->state.gfx.dirty |= KK_DIRTY_VB;
 
       cmd->state.gfx.occlusion.mode = save->pipeline.gfx.occlusion;
-      cmd->state.gfx.dirty |= KK_DIRTY_OCCLUSION;
+
+      /* Restore render pass state */
+      cmd->state.gfx.render_pass_descriptor = save->render_pass_descriptor;
+      cmd->state.gfx.render = save->render;
+
+      /* Mark ALL graphics state as dirty to ensure proper refresh after
+       * meta operations that may have changed render pass/framebuffer state */
+      kk_cmd_buffer_dirty_all_gfx(cmd);
 
       desc->root_dirty = true;
    } else {
@@ -224,10 +240,20 @@ kk_CmdBlitImage2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
    struct kk_device *dev = kk_cmd_buffer_device(cmd);
 
+   VK_FROM_HANDLE(kk_image, src_image, pBlitImageInfo->srcImage);
+   VK_FROM_HANDLE(kk_image, dst_image, pBlitImageInfo->dstImage);
+   fprintf(
+      stderr,
+      "DEBUG: kk_CmdBlitImage2 src=%p (fmt=%u) -> dst=%p (fmt=%u) regions=%u\n",
+      (void *)src_image, src_image->vk.format, (void *)dst_image,
+      dst_image->vk.format, pBlitImageInfo->regionCount);
+
    struct kk_meta_save save;
    kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
    vk_meta_blit_image2(&cmd->vk, &dev->meta, pBlitImageInfo);
    kk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
+
+   fprintf(stderr, "DEBUG: kk_CmdBlitImage2 completed\n");
 }
 
 VKAPI_ATTR void VKAPI_CALL

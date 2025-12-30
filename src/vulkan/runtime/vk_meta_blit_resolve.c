@@ -340,6 +340,12 @@ build_blit_shader(const struct vk_meta_blit_key *key)
                                                  out_type, out_name);
          out->data.location = out_location;
 
+         /* Force alpha to 1.0 for color blits - some apps render with alpha=0
+          * which causes gray/transparent areas on Metal */
+         if (aspect == VK_IMAGE_ASPECT_COLOR_BIT && out_comps == 4) {
+            val = nir_vector_insert_imm(b, val, nir_imm_float(b, 1.0f), 3);
+         }
+
          nir_store_var(b, out, val, BITFIELD_MASK(out_comps));
       }
    }

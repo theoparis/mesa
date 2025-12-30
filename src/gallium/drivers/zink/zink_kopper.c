@@ -521,6 +521,7 @@ zink_kopper_displaytarget_create(struct zink_screen *screen, unsigned tex_usage,
       if (srgb == format)
          srgb = PIPE_FORMAT_NONE;
    }
+   /* Force RGBA format to avoid BGRA format conversion issues in kosmickrisp blit */
    cdt->formats[0] = zink_get_format(screen, format);
    if (srgb) {
       cdt->format_list.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
