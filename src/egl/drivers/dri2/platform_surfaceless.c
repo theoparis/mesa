@@ -571,7 +571,8 @@ surfaceless_metal_kopper_set_surface_create_info(void *_draw,
    /* The native window is the CAMetalLayer pointer */
    metal->pLayer = layer;
    ci->has_alpha = true; /* Assume alpha support */
-   ci->present_opaque = dri2_surf->base.PresentOpaque;
+   /* Force opaque presentation on Metal - don't blend with desktop */
+   ci->present_opaque = true;
 }
 
 static const __DRIkopperLoaderExtension kopper_metal_loader_extension = {

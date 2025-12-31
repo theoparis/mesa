@@ -181,12 +181,6 @@ kk_image_view_init(struct kk_device *dev, struct kk_image_view *view,
          view->planes[view_plane].sampled_gpu_resource_id =
             mtl_texture_get_gpu_resource_id(
                view->planes[view_plane].mtl_handle_sampled);
-         fprintf(
-            stderr,
-            "DEBUG: kk_image_view_init plane=%u sampled_gpu_resource_id=%llu mtl_handle=%p\n",
-            view_plane,
-            (unsigned long long)view->planes[view_plane].sampled_gpu_resource_id,
-            (void *)view->planes[view_plane].mtl_handle_sampled);
       }
 
       if (view->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) {
