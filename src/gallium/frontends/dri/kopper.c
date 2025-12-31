@@ -371,10 +371,16 @@ kopper_update_drawable_info(struct dri_drawable *drawable)
                                 drawable->textures[ST_ATTACHMENT_FRONT_LEFT];
 
    bool do_kopper_update = is_window && ptex && screen->fd == -1;
-   if (drawable->info.bos.sType == VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR && do_kopper_update)
+   /* For X11 and Metal surfaces, use zink_kopper_update which queries the
+    * actual surface capabilities to get the current drawable size.
+    */
+   if (do_kopper_update &&
+       (drawable->info.bos.sType == VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR ||
+        drawable->info.bos.sType == VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT)) {
       zink_kopper_update(kopper_get_zink_screen(screen->base.screen), ptex, &drawable->w, &drawable->h);
-   else
+   } else {
       get_drawable_info(drawable, &drawable->w, &drawable->h);
+   }
 }
 
 static inline void

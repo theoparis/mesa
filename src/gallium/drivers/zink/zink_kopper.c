@@ -737,8 +737,9 @@ zink_kopper_acquire(struct zink_context *ctx, struct zink_resource *res, uint64_
       return false;
    }
    const struct kopper_swapchain *cswap = cdt->swapchain;
-   res->obj->new_dt |= res->base.b.width0 != cswap->scci.imageExtent.width ||
-                       res->base.b.height0 != cswap->scci.imageExtent.height;
+   bool size_mismatch = res->base.b.width0 != cswap->scci.imageExtent.width ||
+                        res->base.b.height0 != cswap->scci.imageExtent.height;
+   res->obj->new_dt |= size_mismatch;
    struct zink_screen *zscreen = zink_screen(kopper_get_zink_screen(ctx->base.screen));
    VkResult ret = kopper_acquire(zscreen, res, timeout);
    if (ret == VK_SUCCESS || ret == VK_SUBOPTIMAL_KHR) {
@@ -834,8 +835,9 @@ kopper_present(void *data, void *gdata, int thread_idx)
    swapchain->last_present = cpi->image;
    if (cpi->indefinite_acquire)
       p_atomic_dec(&swapchain->num_acquires);
-   if (error2 == VK_SUBOPTIMAL_KHR && cdt->swapchain == swapchain)
+   if (error2 == VK_SUBOPTIMAL_KHR && cdt->swapchain == swapchain) {
       cpi->res->obj->new_dt = true;
+   }
 
    /* it's illegal to destroy semaphores if they're in use by a cmdbuf.
     * but what does "in use" actually mean?
@@ -1153,31 +1155,35 @@ zink_kopper_update(struct pipe_screen *pscreen, struct pipe_resource *pres, int 
    if (!res->obj->dt)
       return false;
    struct kopper_displaytarget *cdt = res->obj->dt;
-   if (cdt->type != KOPPER_X11) {
-      *w = res->base.b.width0;
-      *h = res->base.b.height0;
+   /* For X11 and Metal surfaces, query the current surface capabilities to get
+    * the actual drawable size. This is necessary to handle window resizing.
+    */
+   if (cdt->type == KOPPER_X11 || cdt->type == KOPPER_METAL) {
+      VkResult ret = update_caps(screen, cdt);
+      if (ret != VK_SUCCESS) {
+         mesa_loge("zink: failed to update swapchain capabilities: %s", vk_Result_to_str(ret));
+         cdt->is_kill = true;
+         return false;
+      }
+
+      if (cdt->caps.currentExtent.width == 0xFFFFFFFF && cdt->caps.currentExtent.height == 0xFFFFFFFF) {
+         /*
+            currentExtent is the current width and height of the surface, or the special value (0xFFFFFFFF,
+            0xFFFFFFFF) indicating that the surface size will be determined by the extent of a swapchain
+            targeting the surface.
+          */
+         *w = res->base.b.width0;
+         *h = res->base.b.height0;
+         return true;
+      }
+
+      *w = cdt->caps.currentExtent.width;
+      *h = cdt->caps.currentExtent.height;
       return true;
    }
-   VkResult ret = update_caps(screen, cdt);
-   if (ret != VK_SUCCESS) {
-      mesa_loge("zink: failed to update swapchain capabilities: %s", vk_Result_to_str(ret));
-      cdt->is_kill = true;
-      return false;
-   }
-
-   if (cdt->caps.currentExtent.width == 0xFFFFFFFF && cdt->caps.currentExtent.height == 0xFFFFFFFF) {
-      /*
-         currentExtent is the current width and height of the surface, or the special value (0xFFFFFFFF,
-         0xFFFFFFFF) indicating that the surface size will be determined by the extent of a swapchain
-         targeting the surface.
-       */
-      *w = res->base.b.width0;
-      *h = res->base.b.height0;
-      return true;
-   }
-
-   *w = cdt->caps.currentExtent.width;
-   *h = cdt->caps.currentExtent.height;
+   /* For other surface types (e.g. Wayland), just return the resource dimensions */
+   *w = res->base.b.width0;
+   *h = res->base.b.height0;
    return true;
 }
 
