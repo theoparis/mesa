@@ -43,34 +43,11 @@
 #include "loader_dri_helper.h"
 
 #if defined(__APPLE__) && defined(VK_USE_PLATFORM_METAL_EXT)
-#include <execinfo.h>
 #include <pthread.h>
-#include <signal.h>
 #include <dispatch/dispatch.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <vulkan/vulkan_metal.h>
-
-static void
-crash_handler(int sig)
-{
-   void *array[50];
-   int size = backtrace(array, 50);
-   fprintf(stderr, "\n\n=== CRASH HANDLER: Signal %d ===\n", sig);
-   fprintf(stderr, "Stack trace:\n");
-   backtrace_symbols_fd(array, size, STDERR_FILENO);
-   fprintf(stderr, "=== END STACK TRACE ===\n\n");
-   signal(sig, SIG_DFL);
-   raise(sig);
-}
-
-__attribute__((constructor)) static void
-install_crash_handler(void)
-{
-   signal(SIGSEGV, crash_handler);
-   signal(SIGBUS, crash_handler);
-   signal(SIGABRT, crash_handler);
-}
 #endif
 
 static struct dri_image *
@@ -345,70 +322,24 @@ static const __DRIextension *kopper_loader_extensions[] = {
 
 #ifdef VK_USE_PLATFORM_METAL_EXT
 
-struct get_size_ctx {
-   void *layer;
-   double w;
-   double h;
-};
-
-static void
-get_drawable_size_main_thread(void *data)
-{
-   struct get_size_ctx *ctx = data;
-   typedef struct {
-      double width;
-      double height;
-   } MGLSize;
-
-   /* Check superlayer to verify attachment */
-   id superlayer = ((id(*)(id, SEL))objc_msgSend)(
-      (id)ctx->layer, sel_registerName("superlayer"));
-
-   MGLSize (*msgSendSize)(id, SEL) = (MGLSize(*)(id, SEL))objc_msgSend;
-   MGLSize size = msgSendSize((id)ctx->layer, sel_registerName("drawableSize"));
-   ctx->w = size.width;
-   ctx->h = size.height;
-}
-
 static void
 surfaceless_metal_kopper_get_drawable_info(struct dri_drawable *draw, int *w,
                                            int *h, void *loaderPrivate)
 {
    struct dri2_egl_surface *dri2_surf = loaderPrivate;
-   void *layer = dri2_surf->base.NativeSurface;
 
-   if (layer) {
-      /* Debugging SIGBUS: Validate layer state */
-
-      /* Check class */
-      const char *cls = object_getClassName((id)layer);
-
-      /* Check device property */
-      id device =
-         ((id(*)(id, SEL))objc_msgSend)((id)layer, sel_registerName("device"));
-
-      /* [layer drawableSize] */
-      /* Query on Main Thread to avoid race conditions with CoreAnimation which
-       * can cause SIGBUS */
-
-      struct get_size_ctx ctx;
-      ctx.layer = layer;
-      ctx.w = 0;
-      ctx.h = 0;
-
-      if (pthread_main_np()) {
-         get_drawable_size_main_thread(&ctx);
-      } else {
-         dispatch_sync_f(dispatch_get_main_queue(), &ctx,
-                         get_drawable_size_main_thread);
-      }
-
-      *w = (int)ctx.w;
-      *h = (int)ctx.h;
-   } else {
-      *w = dri2_surf->base.Width;
-      *h = dri2_surf->base.Height;
-   }
+   /* PERFORMANCE FIX: Return cached dimensions instead of querying the
+    * CAMetalLayer on every call via dispatch_sync to main thread.
+    *
+    * The previous implementation was a major performance bottleneck - each
+    * dispatch_sync_f() blocks the calling thread waiting for the main thread.
+    * This was happening multiple times per frame, causing massive stalls.
+    *
+    * The surface dimensions are already updated through kopper_update_size()
+    * on resize events, so we can safely return the cached values.
+    */
+   *w = dri2_surf->base.Width;
+   *h = dri2_surf->base.Height;
 }
 
 #include <objc/message.h>

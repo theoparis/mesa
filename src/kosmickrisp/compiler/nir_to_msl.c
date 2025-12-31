@@ -1756,6 +1756,42 @@ intrinsic_to_msl(struct nir_to_msl_ctx *ctx, nir_intrinsic_instr *instr)
       src_to_msl(ctx, &instr->src[0]);
       P(ctx, ");\n");
       break;
+   case nir_intrinsic_inclusive_scan:
+      switch (nir_intrinsic_reduction_op(instr)) {
+      case nir_op_iadd:
+      case nir_op_fadd:
+         P(ctx, "simd_prefix_inclusive_sum(");
+         break;
+      case nir_op_imul:
+      case nir_op_fmul:
+         P(ctx, "simd_prefix_inclusive_product(");
+         break;
+      default:
+         /* Metal only supports sum and product for prefix operations.
+          * Other ops would need to be lowered in NIR. */
+         UNREACHABLE("Unsupported inclusive_scan op");
+      }
+
+      src_to_msl(ctx, &instr->src[0]);
+      P(ctx, ");\n");
+      break;
+   case nir_intrinsic_exclusive_scan:
+      switch (nir_intrinsic_reduction_op(instr)) {
+      case nir_op_iadd:
+      case nir_op_fadd:
+         P(ctx, "simd_prefix_exclusive_sum(");
+         break;
+      case nir_op_imul:
+      case nir_op_fmul:
+         P(ctx, "simd_prefix_exclusive_product(");
+         break;
+      default:
+         UNREACHABLE("Unsupported exclusive_scan op");
+      }
+
+      src_to_msl(ctx, &instr->src[0]);
+      P(ctx, ");\n");
+      break;
    case nir_intrinsic_store_clip_distance_kk:
       P_IND(ctx, "out.gl_ClipDistance[%d] = ", nir_intrinsic_base(instr));
       src_to_msl(ctx, &instr->src[0]);

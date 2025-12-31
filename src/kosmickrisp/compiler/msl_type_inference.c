@@ -478,6 +478,8 @@ infer_types_from_intrinsic(struct hash_table *types, nir_intrinsic_instr *instr)
       set_type(types, &instr->src[1], TYPE_UINT);
       break;
    case nir_intrinsic_reduce:
+   case nir_intrinsic_inclusive_scan:
+   case nir_intrinsic_exclusive_scan:
       switch (nir_intrinsic_reduction_op(instr)) {
       case nir_op_iand:
       case nir_op_ior:

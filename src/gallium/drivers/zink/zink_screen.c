@@ -1257,7 +1257,10 @@ zink_init_screen_caps(struct zink_screen *screen)
 
    caps->mesh.pipeline_statistic_queries = screen->info.mesh_feats.meshShaderQueries;
 
-   if (screen->info.feats12.subgroupBroadcastDynamicId && screen->info.feats12.shaderSubgroupExtendedTypes && screen->info.feats.features.shaderFloat64) {
+   /* Enable subgroup operations if the Vulkan driver supports them.
+    * Note: shaderFloat64 was previously required here for GL_ARB_shader_ballot's
+    * uint64 ballot masks, but subgroup shuffle/basic ops don't need it. */
+   if (screen->info.feats12.subgroupBroadcastDynamicId && screen->info.feats12.shaderSubgroupExtendedTypes) {
       caps->shader_subgroup_size = screen->info.subgroup.subgroupSize;
       if (screen->info.have_EXT_mesh_shader)
          caps->shader_subgroup_supported_stages = screen->info.subgroup.supportedStages & BITFIELD_MASK(MESA_SHADER_MESH_STAGES);
@@ -2939,6 +2942,7 @@ init_driver_workarounds(struct zink_screen *screen)
    case VK_DRIVER_ID_MESA_PANVK:
    case VK_DRIVER_ID_MESA_NVK:
    case VK_DRIVER_ID_QUALCOMM_PROPRIETARY:
+   case VK_DRIVER_ID_MESA_KOSMICKRISP:
       screen->driver_workarounds.implicit_sync = false;
       break;
    default:
