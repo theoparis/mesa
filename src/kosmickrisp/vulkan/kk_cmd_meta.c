@@ -242,17 +242,11 @@ kk_CmdBlitImage2(VkCommandBuffer commandBuffer,
 
    VK_FROM_HANDLE(kk_image, src_image, pBlitImageInfo->srcImage);
    VK_FROM_HANDLE(kk_image, dst_image, pBlitImageInfo->dstImage);
-   fprintf(
-      stderr,
-      "DEBUG: kk_CmdBlitImage2 src=%p (fmt=%u) -> dst=%p (fmt=%u) regions=%u\n",
-      (void *)src_image, src_image->vk.format, (void *)dst_image,
-      dst_image->vk.format, pBlitImageInfo->regionCount);
 
    struct kk_meta_save save;
    kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
    vk_meta_blit_image2(&cmd->vk, &dev->meta, pBlitImageInfo);
    kk_meta_end(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS);
-
 }
 
 VKAPI_ATTR void VKAPI_CALL
