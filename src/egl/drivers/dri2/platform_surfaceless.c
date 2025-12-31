@@ -70,7 +70,6 @@ install_crash_handler(void)
    signal(SIGSEGV, crash_handler);
    signal(SIGBUS, crash_handler);
    signal(SIGABRT, crash_handler);
-   fprintf(stderr, "DEBUG: Crash handler installed\n");
 }
 #endif
 
@@ -364,7 +363,6 @@ get_drawable_size_main_thread(void *data)
    /* Check superlayer to verify attachment */
    id superlayer = ((id(*)(id, SEL))objc_msgSend)(
       (id)ctx->layer, sel_registerName("superlayer"));
-   fprintf(stderr, "DEBUG: get_drawable_info superlayer=%p\n", superlayer);
 
    MGLSize (*msgSendSize)(id, SEL) = (MGLSize(*)(id, SEL))objc_msgSend;
    MGLSize size = msgSendSize((id)ctx->layer, sel_registerName("drawableSize"));
@@ -381,16 +379,13 @@ surfaceless_metal_kopper_get_drawable_info(struct dri_drawable *draw, int *w,
 
    if (layer) {
       /* Debugging SIGBUS: Validate layer state */
-      fprintf(stderr, "DEBUG: get_drawable_info layer=%p\n", layer);
 
       /* Check class */
       const char *cls = object_getClassName((id)layer);
-      fprintf(stderr, "DEBUG: get_drawable_info class=%s\n", cls);
 
       /* Check device property */
       id device =
          ((id(*)(id, SEL))objc_msgSend)((id)layer, sel_registerName("device"));
-      fprintf(stderr, "DEBUG: get_drawable_info device=%p\n", device);
 
       /* [layer drawableSize] */
       /* Query on Main Thread to avoid race conditions with CoreAnimation which
@@ -408,15 +403,11 @@ surfaceless_metal_kopper_get_drawable_info(struct dri_drawable *draw, int *w,
                          get_drawable_size_main_thread);
       }
 
-      fprintf(stderr, "DEBUG: get_drawable_info size=%fx%f\n", ctx.w, ctx.h);
-      fprintf(stderr, "DEBUG: get_drawable_info EXIT\n");
       *w = (int)ctx.w;
       *h = (int)ctx.h;
    } else {
       *w = dri2_surf->base.Width;
       *h = dri2_surf->base.Height;
-      fprintf(stderr, "DEBUG: get_drawable_info NULL layer, returning %dx%d\n",
-              *w, *h);
    }
 }
 
@@ -437,7 +428,6 @@ swap_layer_on_main_thread(void *data)
       return;
 
    const char *className = object_getClassName((id)lblayer);
-   fprintf(stderr, "DEBUG: NativeSurface class: %s\n", className);
 
    if (strcmp(className, "NSViewBackingLayer") == 0 ||
        strcmp(className, "_NSViewBackingLayer") == 0) {
@@ -446,9 +436,6 @@ swap_layer_on_main_thread(void *data)
                                                sel_registerName("delegate"));
 
       if (view) {
-         fprintf(stderr, "DEBUG: Found delegate view class: %s\n",
-                 object_getClassName(view));
-
          /* [view setWantsLayer:YES] */
          ((void (*)(id, SEL, BOOL))objc_msgSend)(
             view, sel_registerName("setWantsLayer:"), 1);
@@ -460,7 +447,8 @@ swap_layer_on_main_thread(void *data)
                (id)CAMetalLayerClass, sel_registerName("layer"));
 
             if (newLayer) {
-               /* Configure the layer to match the view's dimensions and scale */
+               /* Configure the layer to match the view's dimensions and
+                * scale */
                /* CGRect bounds = [view bounds] */
                typedef struct {
                   double x, y, w, h;
@@ -469,8 +457,6 @@ swap_layer_on_main_thread(void *data)
                   (MGLRect(*)(id, SEL))objc_msgSend;
                MGLRect viewBounds =
                   msgSendRect(view, sel_registerName("bounds"));
-               fprintf(stderr, "DEBUG: view bounds: %f,%f %fx%f\n",
-                       viewBounds.x, viewBounds.y, viewBounds.w, viewBounds.h);
 
                /* [newLayer setFrame:viewBounds] */
                void (*msgSendRect_v)(id, SEL, MGLRect) =
@@ -478,7 +464,14 @@ swap_layer_on_main_thread(void *data)
                msgSendRect_v(newLayer, sel_registerName("setFrame:"),
                              viewBounds);
 
-               /* Get window's backingScaleFactor for Retina display support */
+               /* [newLayer setOpaque:YES] - prevents alpha blending
+                * with desktop */
+               void (*msgSendBool_v)(id, SEL, BOOL) =
+                  (void (*)(id, SEL, BOOL))objc_msgSend;
+               msgSendBool_v(newLayer, sel_registerName("setOpaque:"), YES);
+
+               /* Get window's backingScaleFactor for Retina display
+                * support */
                /* id window = [view window] */
                id window = ((id(*)(id, SEL))objc_msgSend)(
                   view, sel_registerName("window"));
@@ -489,8 +482,6 @@ swap_layer_on_main_thread(void *data)
                      (double (*)(id, SEL))objc_msgSend;
                   scale = msgSendDouble(window,
                                         sel_registerName("backingScaleFactor"));
-                  fprintf(stderr, "DEBUG: window backingScaleFactor: %f\n",
-                          scale);
 
                   /* [newLayer setContentsScale:scale] */
                   void (*msgSendDouble_v)(id, SEL, double) =
@@ -499,10 +490,10 @@ swap_layer_on_main_thread(void *data)
                                   sel_registerName("setContentsScale:"), scale);
                }
 
-               /* Explicitly set drawableSize to match the backing store size.
-                * CAMetalLayer.drawableSize = view.bounds.size * contentsScale
-                * If we don't set this, drawableSize might return 1x1 until
-                * the next layout pass.
+               /* Explicitly set drawableSize to match the backing store
+                * size. CAMetalLayer.drawableSize = view.bounds.size *
+                * contentsScale If we don't set this, drawableSize might
+                * return 1x1 until the next layout pass.
                 */
                typedef struct {
                   double w, h;
@@ -510,8 +501,6 @@ swap_layer_on_main_thread(void *data)
                MGLSize drawableSize;
                drawableSize.w = viewBounds.w * scale;
                drawableSize.h = viewBounds.h * scale;
-               fprintf(stderr, "DEBUG: setting drawableSize: %fx%f\n",
-                       drawableSize.w, drawableSize.h);
                void (*msgSendSize_v)(id, SEL, MGLSize) =
                   (void (*)(id, SEL, MGLSize))objc_msgSend;
                msgSendSize_v(newLayer, sel_registerName("setDrawableSize:"),
@@ -530,13 +519,9 @@ swap_layer_on_main_thread(void *data)
                                               sel_registerName("retain"));
 
                ctx->result_layer = newLayer; /* Pass back the new layer */
-               fprintf(stderr, "DEBUG: Replaced NSViewBackingLayer with "
-                               "CAMetalLayer (Retained)\n");
             } else {
-               fprintf(stderr, "DEBUG: Failed to create CAMetalLayer\n");
             }
          } else {
-            fprintf(stderr, "DEBUG: CAMetalLayer class not found!\n");
          }
       }
    }
