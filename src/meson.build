@@ -160,6 +160,9 @@ endif
 if with_egl
   subdir('egl')
 endif
+if host_machine.system() == 'darwin' and with_egl
+  subdir('glwrapper')
+endif
 if with_gallium
   if with_glx == 'dri' or with_platform_x11
     subdir('gallium/targets/dril')

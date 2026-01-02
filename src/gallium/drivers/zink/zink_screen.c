@@ -3443,7 +3443,16 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
 
    u_trace_state_init();
 
-   screen->loader_lib = util_dl_open(VK_LIBNAME);
+   /* Check for MESA_VULKAN_LIBRARY environment variable first (useful on macOS where
+    * SIP strips DYLD_LIBRARY_PATH from hardened processes like Java) */
+   const char *vk_lib_env = getenv("MESA_VULKAN_LIBRARY");
+   if (vk_lib_env) {
+      screen->loader_lib = util_dl_open(vk_lib_env);
+      if (screen->loader_lib)
+         fprintf(stderr, "ZINK: loaded vulkan from MESA_VULKAN_LIBRARY=%s\n", vk_lib_env);
+   }
+   if (!screen->loader_lib)
+      screen->loader_lib = util_dl_open(VK_LIBNAME);
    if (!screen->loader_lib) {
       if (!screen->driver_name_is_inferred)
          mesa_loge("ZINK: failed to load "VK_LIBNAME);

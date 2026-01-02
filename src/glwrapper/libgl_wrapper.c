@@ -34,22 +34,29 @@ static PFNEGLGETPROCADDRESSPROC mesa_eglGetProcAddress = NULL;
 
 __attribute__((constructor))
 static void init_egl_loader(void) {
-    const char *egl_paths[] = {
-        "/Users/lucamignatti/mesa-native/lib/libEGL.dylib",
-        "libEGL.dylib",
-        NULL
-    };
+    /* Find libEGL.dylib relative to this library (they're in the same directory) */
+    Dl_info info;
+    char egl_path[1024];
     
-    for (int i = 0; egl_paths[i] != NULL; i++) {
-        egl_handle = dlopen(egl_paths[i], RTLD_NOW | RTLD_LOCAL);
-        if (egl_handle) {
-            fprintf(stderr, "libGL wrapper: Loaded EGL from %s\n", egl_paths[i]);
-            break;
+    if (dladdr((void*)init_egl_loader, &info) && info.dli_fname) {
+        /* Get directory of this library */
+        const char *last_slash = strrchr(info.dli_fname, '/');
+        if (last_slash) {
+            size_t dir_len = last_slash - info.dli_fname;
+            snprintf(egl_path, sizeof(egl_path), "%.*s/libEGL.dylib", (int)dir_len, info.dli_fname);
+        } else {
+            snprintf(egl_path, sizeof(egl_path), "libEGL.dylib");
         }
+    } else {
+        /* Fallback to just the filename, let dyld search */
+        snprintf(egl_path, sizeof(egl_path), "libEGL.dylib");
     }
     
-    if (!egl_handle) {
-        fprintf(stderr, "libGL wrapper: Failed to load libEGL.dylib\n");
+    egl_handle = dlopen(egl_path, RTLD_NOW | RTLD_LOCAL);
+    if (egl_handle) {
+        fprintf(stderr, "libGL wrapper: Loaded EGL from %s\n", egl_path);
+    } else {
+        fprintf(stderr, "libGL wrapper: Failed to load %s: %s\n", egl_path, dlerror());
         return;
     }
     
