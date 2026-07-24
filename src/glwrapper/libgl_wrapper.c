@@ -54,7 +54,6 @@ static void init_egl_loader(void) {
     
     egl_handle = dlopen(egl_path, RTLD_NOW | RTLD_LOCAL);
     if (egl_handle) {
-        fprintf(stderr, "libGL wrapper: Loaded EGL from %s\n", egl_path);
     } else {
         fprintf(stderr, "libGL wrapper: Failed to load %s: %s\n", egl_path, dlerror());
         return;
@@ -64,7 +63,6 @@ static void init_egl_loader(void) {
     if (!mesa_eglGetProcAddress) {
         fprintf(stderr, "libGL wrapper: Failed to find eglGetProcAddress\n");
     } else {
-        fprintf(stderr, "libGL wrapper: Successfully initialized EGL function loader\n");
     }
 }
 
@@ -92,7 +90,6 @@ const GLubyte *glGetString(GLenum name) {
     static const GLubyte *(*fn)(GLenum) = NULL;
     if (!fn) {
         fn = (const GLubyte *(*)(GLenum))get_gl_proc("glGetString");
-        if (fn) fprintf(stderr, "libGL wrapper: glGetString loaded\n");
     }
     return fn ? fn(name) : NULL;
 }
@@ -102,7 +99,6 @@ const GLubyte *glGetStringi(GLenum name, GLuint index) {
     static const GLubyte *(*fn)(GLenum, GLuint) = NULL;
     if (!fn) {
         fn = (const GLubyte *(*)(GLenum, GLuint))get_gl_proc("glGetStringi");
-        if (fn) fprintf(stderr, "libGL wrapper: glGetStringi loaded\n");
     }
     return fn ? fn(name, index) : NULL;
 }

@@ -373,7 +373,6 @@ disk_cache_init(struct zink_screen *screen)
 
       return false;
    }
-#endif
 
    return true;
 }
