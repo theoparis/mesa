@@ -98,7 +98,6 @@ c_cpp_args = []
 c_args = []
 cpp_args = []
 
-with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_loader_rpath = get_option('vulkan-loader-rpath')
 with_vulkan_icd_dir = get_option('vulkan-icd-dir')
 with_tests = get_option('build-tests')

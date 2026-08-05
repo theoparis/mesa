@@ -59,27 +59,6 @@ inc_zink_vk = []
 zink_link_args = []
 
 if host_machine.system() == 'darwin'
-
-  # MoltenVK options
-  if with_moltenvk_dir != ''
-    # Vulkan SDK 1.3.250 to 1.3.268 support
-    moltenvk_includes = join_paths(with_moltenvk_dir, 'MoltenVK', 'include')
-    if not fs.is_dir(moltenvk_includes)
-      # Vulkan SDK 1.3.275 onwards support
-      moltenvk_includes = join_paths(with_moltenvk_dir, 'macos', 'include')
-      if not fs.is_dir(moltenvk_includes)
-        # MoltenVK from brew support
-        moltenvk_includes = join_paths(with_moltenvk_dir, 'include')
-        if not fs.is_dir(moltenvk_includes)
-          error(f'moltenvk includes cannot be found in moltenvk-dir="@with_moltenvk_dir@"')
-        endif
-      endif
-    endif
-    inc_zink_vk += include_directories(moltenvk_includes)
-  else
-    error('moltenvk-dir is required but not set.')
-  endif
-
   zink_c_args += ['-x','objective-c'] # Put compiler into objective-C mode to allow for MacOS types, like IOSurface and CAMetalLayer
   zink_c_args += ['-iframework' , 'Foundation']
 
